@@ -17,13 +17,15 @@ export default function RegisterScreen({ navigation }) {
   const handleRegister = async () => {
     setLoading(true);
     try {
+      console.log('Generating keys...');
       const { publicKey, privateKey } = generateKeys();
       await savePrivateKey(privateKey);
       await register({ email, password, public_key: publicKey });
       alert('Registered successfully');
       navigation.navigate('Login');
     } catch (err) {
-      alert('Registration failed');
+      console.log(err);
+      alert('Registration failed ' + err);
     } finally {
       setLoading(false);
     }

@@ -3,7 +3,7 @@ import { View, Text, FlatList, TouchableOpacity, ActivityIndicator } from 'react
 import axios from 'axios';
 import { useNavigation, useRoute } from '@react-navigation/native';
 
-const API_URL = 'http://YOUR_SERVER_IP:8000';
+const API_URL = 'http://localhost:8000';
 
 export default function ChatListScreen() {
   const navigation = useNavigation();
