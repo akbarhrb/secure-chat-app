@@ -1,50 +1,91 @@
 import React, { useEffect, useState, useRef } from 'react';
-import {
-  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet,
-  KeyboardAvoidingView, Platform, Image, Dimensions, SafeAreaView,
-  ActivityIndicator, Alert, Linking
+import { 
+  View, Text, TextInput, TouchableOpacity, FlatList, StyleSheet, 
+  KeyboardAvoidingView, Platform, SafeAreaView, ActivityIndicator, Image, Alert 
 } from 'react-native';
 import axios from 'axios';
+import * as ImagePicker from 'expo-image-picker';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
 
-const { width } = Dimensions.get('window');
+// Import your utils
+import { encryptMessage, decryptMessage, encryptFile, decryptFile } from '../services/crypto';
+import { getPrivateKey } from '../storage/secureStorage';
 
-// REPLACE THIS with your machine's IP address if testing on a physical device
 const API_URL = 'http://localhost:8000'; 
-
-const COLORS = {
-  primary: '#6366F1',
-  sentBubble: '#6366F1',
-  receivedBubble: '#F1F5F9',
-  bg: '#FFFFFF',
-  textDark: '#1E293B',
-  textLight: '#94A3B8',
-  white: '#FFFFFF'
+const COLORS = { 
+  primary: '#6366F1', 
+  sentBubble: '#6366F1', 
+  receivedBubble: '#F1F5F9', 
+  textDark: '#1E293B', 
+  white: '#FFFFFF',
+  muted: '#64748B'
 };
 
 export default function ChatScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { userId, contactId, contactEmail } = route.params;
+  const { userId, contactId, contactEmail, contactPublicKey: initialPublicKey } = route.params;
 
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
   const [loading, setLoading] = useState(true);
-  const [uploading, setUploading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [contactPublicKey, setContactPublicKey] = useState(initialPublicKey);
   
   const intervalRef = useRef(null);
   const flatListRef = useRef(null);
 
-  // 1. Fetch Messages
+  useEffect(() => {
+    initChat();
+    // Poll for new messages every 2 seconds
+    intervalRef.current = setInterval(fetchMessages, 2000);
+    return () => clearInterval(intervalRef.current);
+  }, []);
+
+  const initChat = async () => {
+    if (!contactPublicKey) {
+      await fetchContactPublicKey();
+    }
+    await fetchMessages();
+  };
+
+  const fetchContactPublicKey = async () => {
+    try {
+      const res = await axios.get(`${API_URL}/public-key/${contactId}`);
+      setContactPublicKey(res.data.public_key);
+    } catch (err) {
+      console.error("Could not fetch contact public key", err);
+    }
+  };
+
   const fetchMessages = async () => {
     try {
       const res = await axios.get(`${API_URL}/messages`, {
         params: { user_id: userId, contact_id: contactId }
       });
-      setMessages(res.data);
+      
+      const privKey = await getPrivateKey();
+      
+      const decryptedData = await Promise.all(res.data.map(async (msg) => {
+        if (msg.message && typeof msg.message === 'object') {
+          try {
+            // Case 1: Standard Text Message
+            if (msg.message.type === 'text' || !msg.message.type) {
+              return { ...msg, message: decryptMessage(msg.message, privKey) };
+            }
+            // Case 2: Image Message (Handled within the render component for performance)
+            if (msg.message.type === 'image') {
+              return { ...msg, isImage: true };
+            }
+          } catch (e) {
+            return { ...msg, message: "[Decryption Failed]" };
+          }
+        }
+        return msg;
+      }));
+
+      setMessages(decryptedData);
     } catch (err) {
       console.error('Error fetching messages', err);
     } finally {
@@ -52,40 +93,17 @@ export default function ChatScreen() {
     }
   };
 
-  useEffect(() => {
-    fetchMessages();
-    // Polling every 2 seconds
-    intervalRef.current = setInterval(fetchMessages, 2000);
-    return () => clearInterval(intervalRef.current);
-  }, []);
-
-  // 2. Open File Logic (Web + Mobile Compatible)
-  const handleOpenFile = async (fileUrl) => {
-    if (!fileUrl) return;
-
-    if (Platform.OS === 'web') {
-      window.open(fileUrl, '_blank');
-    } else {
-      const supported = await Linking.canOpenURL(fileUrl);
-      if (supported) {
-        await Linking.openURL(fileUrl);
-      } else {
-        Alert.alert("Error", "Unable to open this file type.");
-      }
-    }
-  };
-
-  // 3. Send Text Message
   const sendMessage = async () => {
-    if (!text.trim()) return;
-    const messageContent = text;
+    if (!text.trim() || !contactPublicKey) return;
+    const plainText = text;
     setText(''); 
 
     try {
+      const encryptedPayload = encryptMessage(plainText, contactPublicKey);
       await axios.post(`${API_URL}/messages`, {
         sender_id: userId,
         receiver_id: contactId,
-        message: messageContent
+        message: { ...encryptedPayload, type: 'text' }
       });
       fetchMessages();
     } catch (err) {
@@ -93,239 +111,196 @@ export default function ChatScreen() {
     }
   };
 
-  // 4. File Picking Logic
   const pickImage = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      alert('Permission to access gallery is required!');
-      return;
-    }
-
     let result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.6,
+      allowsEditing: true,
+      quality: 0.7,
+      base64: true,
     });
 
     if (!result.canceled) {
-      handleUpload(result.assets[0].uri, 'image', result.assets[0].fileName || 'image.jpg');
+      sendImage(result.assets[0].base64);
     }
   };
 
-  const pickDocument = async () => {
-    let result = await DocumentPicker.getDocumentAsync({ type: "*/*" });
-    if (!result.canceled) {
-      handleUpload(result.assets[0].uri, 'file', result.assets[0].name);
-    }
-  };
-
-  // 5. Unified Upload Logic
-  const handleUpload = async (uri, type, fileName) => {
-    setUploading(true);
+  const sendImage = async (base64Data) => {
+    setSending(true);
     try {
-      const response = await fetch(uri);
-      const blob = await response.blob();
+      // 1. Encrypt image with AES
+      const { encryptedFileData, aesKey } = encryptFile(base64Data);
 
+      // 2. Upload encrypted blob to server
       const formData = new FormData();
-      formData.append('file', blob, fileName);
-      formData.append('sender_id', userId.toString());
-      formData.append('receiver_id', contactId.toString());
-      formData.append('message_type', type);
+      formData.append('file', encryptedFileData);
+      const uploadRes = await axios.post(`${API_URL}/upload`, formData);
 
-      await axios.post(`${API_URL}/upload`, formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      // 3. Encrypt the AES key with Recipient's RSA Public Key
+      const encryptedKeyBundle = encryptMessage(aesKey, contactPublicKey);
+
+      // 4. Send metadata to chat
+      await axios.post(`${API_URL}/messages`, {
+        sender_id: userId,
+        receiver_id: contactId,
+        message: {
+          type: 'image',
+          fileUrl: uploadRes.data.url,
+          encryptionData: encryptedKeyBundle
+        }
       });
       fetchMessages();
     } catch (err) {
-      console.error(err);
-      alert("Upload Failed.");
+      Alert.alert("Upload Failed", "Could not send encrypted image.");
     } finally {
-      setUploading(false);
+      setSending(false);
     }
   };
 
-  // 6. UI Render Item
   const renderItem = ({ item }) => {
     const isMine = item.sender_id === userId;
-    const isFile = item.message_type === 'file' || item.message_type === 'image';
-
+    
     return (
-      <View style={[styles.messageWrapper, isMine ? styles.mineWrapper : styles.theirWrapper]}>
-        <TouchableOpacity 
-          activeOpacity={isFile ? 0.7 : 1}
-          onPress={() => isFile ? handleOpenFile(item.file_url) : null}
-          style={[styles.bubble, isMine ? styles.sentBubble : styles.receivedBubble]}
-        >
-          {/* Image Content */}
-          {item.message_type === 'image' && (
-            <Image 
-              source={{ uri: item.file_url }} 
-              style={styles.messageImage} 
-              resizeMode="cover"
+      <View style={[styles.wrapper, isMine ? styles.mine : styles.theirs]}>
+        <View style={[styles.bubble, isMine ? styles.sent : styles.received]}>
+          {item.isImage ? (
+            <EncryptedImage 
+              payload={item.message} 
+              isMine={isMine} 
             />
+          ) : (
+            <Text style={{ color: isMine ? '#fff' : '#000' }}>{item.message}</Text>
           )}
-
-          {/* File Content */}
-          {item.message_type === 'file' && (
-            <View style={styles.fileRow}>
-              <View style={[styles.fileIconBox, { backgroundColor: isMine ? 'rgba(255,255,255,0.2)' : 'rgba(99, 102, 241, 0.1)' }]}>
-                <Ionicons name="document-text" size={20} color={isMine ? COLORS.white : COLORS.primary} />
-              </View>
-              <Text style={[styles.fileText, { color: isMine ? COLORS.white : COLORS.textDark }]} numberOfLines={1}>
-                {item.file_url.split('/').pop() || 'Document'}
-              </Text>
-            </View>
-          )}
-
-          {/* Text Content */}
-          {item.message && (
-            <Text style={[styles.messageText, { color: isMine ? COLORS.white : COLORS.textDark }]}>
-              {item.message}
-            </Text>
-          )}
-
-          <Text style={[styles.timeText, { color: isMine ? 'rgba(255,255,255,0.7)' : COLORS.textLight }]}>
-            {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-          </Text>
-        </TouchableOpacity>
+        </View>
+        <Text style={styles.timestamp}>
+          {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+        </Text>
       </View>
     );
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity onPress={() => navigation.goBack()}>
-          <Ionicons name="chevron-back" size={28} color={COLORS.textDark} />
+          <Ionicons name="arrow-back" size={24} color={COLORS.textDark} />
         </TouchableOpacity>
-        <View style={styles.headerTitleContainer}>
-          <Text style={styles.headerName}>{contactEmail ? contactEmail.split('@')[0] : 'Chat'}</Text>
-          <Text style={styles.headerStatus}>Online</Text>
-        </View>
+        <Text style={styles.headerTitle}>{contactEmail}</Text>
+        <Ionicons name="lock-closed" size={18} color={COLORS.primary} />
       </View>
 
       <KeyboardAvoidingView 
-        style={{ flex: 1 }} 
-        behavior={Platform.OS === 'ios' ? 'padding' : null}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
+        behavior={Platform.OS === 'ios' ? 'padding' : null} 
+        style={{ flex: 1 }}
+        keyboardVerticalOffset={90}
       >
-        {loading ? (
-          <View style={styles.center}>
-            <ActivityIndicator color={COLORS.primary} />
-          </View>
-        ) : (
-          <FlatList
-            ref={flatListRef}
-            data={messages}
-            renderItem={renderItem}
-            keyExtractor={(item) => item.id.toString()}
-            contentContainerStyle={{ padding: 16 }}
-            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          />
-        )}
+        <FlatList
+          ref={flatListRef}
+          data={messages}
+          renderItem={renderItem}
+          keyExtractor={(item) => item.id.toString()}
+          contentContainerStyle={{ paddingVertical: 20 }}
+          onContentSizeChange={() => flatListRef.current?.scrollToEnd()}
+        />
 
-        {uploading && (
-          <View style={styles.uploadingBar}>
-            <ActivityIndicator size="small" color={COLORS.primary} />
-            <Text style={styles.uploadingText}>Sending file...</Text>
-          </View>
-        )}
+        {sending && <ActivityIndicator style={{ marginBottom: 10 }} color={COLORS.primary} />}
 
-        {/* Input Area */}
         <View style={styles.inputBar}>
-          <TouchableOpacity onPress={pickDocument} style={styles.iconBtn}>
-            <Ionicons name="add-circle-outline" size={28} color={COLORS.textLight} />
+          <TouchableOpacity style={styles.attachBtn} onPress={pickImage}>
+            <Ionicons name="image-outline" size={24} color={COLORS.muted} />
           </TouchableOpacity>
-          
-          <TextInput
-            style={styles.input}
-            placeholder="Message..."
-            placeholderTextColor={COLORS.textLight}
-            value={text}
-            onChangeText={setText}
+          <TextInput 
+            style={styles.input} 
+            value={text} 
+            onChangeText={setText} 
+            placeholder="Encrypted message..." 
             multiline
           />
-
-          {text.trim().length > 0 ? (
-            <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
-              <Ionicons name="arrow-up" size={24} color={COLORS.white} />
-            </TouchableOpacity>
-          ) : (
-            <TouchableOpacity onPress={pickImage} style={styles.iconBtn}>
-              <Ionicons name="camera-outline" size={28} color={COLORS.textLight} />
-            </TouchableOpacity>
-          )}
+          <TouchableOpacity onPress={sendMessage} style={styles.sendBtn}>
+            <Ionicons name="send" size={20} color="white" />
+          </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
     </SafeAreaView>
   );
 }
 
+// Sub-component to handle Image Decryption
+function EncryptedImage({ payload, isMine }) {
+  const [imageUri, setImageUri] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    decryptAndLoad();
+  }, []);
+
+  const decryptAndLoad = async () => {
+    try {
+      const privKey = await getPrivateKey();
+      // 1. Decrypt the AES Key
+      const aesKey = decryptMessage(payload.encryptionData, privKey);
+      // 2. Fetch the encrypted file
+      const res = await fetch(payload.fileUrl);
+      const encryptedBase64 = await res.text();
+      // 3. Decrypt the file
+      const decryptedBase64 = decryptFile(encryptedBase64, aesKey);
+      setImageUri(`data:image/jpeg;base64,${decryptedBase64}`);
+    } catch (e) {
+      console.error("Image Decryption Failed", e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (loading) return <ActivityIndicator color={isMine ? "#fff" : COLORS.primary} />;
+  if (!imageUri) return <Ionicons name="alert-circle" size={24} color="red" />;
+
+  return <Image source={{ uri: imageUri }} style={styles.imageDisplay} />;
+}
+
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F8FAFC' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  header: {
-    height: 60,
-    backgroundColor: COLORS.white,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 15,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+  header: { 
+    flexDirection: 'row', 
+    alignItems: 'center', 
+    padding: 15, 
+    backgroundColor: '#fff', 
+    borderBottomWidth: 1, 
+    borderColor: '#E2E8F0',
+    gap: 10
   },
-  headerTitleContainer: { flex: 1, marginLeft: 10 },
-  headerName: { fontSize: 17, fontWeight: '700', color: COLORS.textDark },
-  headerStatus: { fontSize: 12, color: '#22C55E', fontWeight: '500' },
-  messageWrapper: { marginBottom: 12, width: '100%' },
-  mineWrapper: { alignItems: 'flex-end' },
-  theirWrapper: { alignItems: 'flex-start' },
-  bubble: {
-    padding: 12,
-    borderRadius: 20,
-    maxWidth: width * 0.78,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  sentBubble: { backgroundColor: COLORS.sentBubble, borderBottomRightRadius: 4 },
-  receivedBubble: { backgroundColor: COLORS.receivedBubble, borderBottomLeftRadius: 4 },
-  messageText: { fontSize: 16, lineHeight: 22 },
-  messageImage: { width: width * 0.65, height: 200, borderRadius: 12, marginBottom: 5 },
-  fileRow: { flexDirection: 'row', alignItems: 'center', padding: 5, borderRadius: 10 },
-  fileIconBox: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center', marginRight: 10 },
-  fileText: { fontSize: 14, fontWeight: '500', flexShrink: 1 },
-  timeText: { fontSize: 10, marginTop: 4, textAlign: 'right', fontWeight: '500' },
-  uploadingBar: { flexDirection: 'row', padding: 8, alignItems: 'center', justifyContent: 'center', backgroundColor: '#EFF6FF' },
-  uploadingText: { marginLeft: 8, fontSize: 12, color: COLORS.primary },
-  inputBar: {
-    flexDirection: 'row',
+  headerTitle: { fontSize: 16, fontWeight: '700', color: COLORS.textDark, flex: 1 },
+  wrapper: { marginBottom: 15, paddingHorizontal: 15 },
+  mine: { alignItems: 'flex-end' },
+  theirs: { alignItems: 'flex-start' },
+  bubble: { padding: 12, borderRadius: 20, maxWidth: '80%', elevation: 1 },
+  sent: { backgroundColor: COLORS.primary, borderBottomRightRadius: 4 },
+  received: { backgroundColor: '#fff', borderBottomLeftRadius: 4 },
+  timestamp: { fontSize: 10, color: COLORS.muted, marginTop: 4, marginHorizontal: 5 },
+  inputBar: { 
+    flexDirection: 'row', 
+    padding: 12, 
+    backgroundColor: '#fff', 
     alignItems: 'center',
-    padding: 10,
-    paddingBottom: Platform.OS === 'ios' ? 25 : 10,
-    backgroundColor: COLORS.white,
     borderTopWidth: 1,
-    borderTopColor: '#F1F5F9',
+    borderColor: '#E2E8F0'
   },
-  input: {
-    flex: 1,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 22,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    marginHorizontal: 10,
-    fontSize: 16,
-    maxHeight: 100,
-    color: COLORS.textDark
+  input: { 
+    flex: 1, 
+    backgroundColor: '#F1F5F9', 
+    borderRadius: 20, 
+    paddingHorizontal: 15, 
+    paddingVertical: 8, 
+    marginRight: 10,
+    maxHeight: 100 
   },
-  sendBtn: {
-    backgroundColor: COLORS.primary,
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    justifyContent: 'center',
-    alignItems: 'center',
+  sendBtn: { 
+    backgroundColor: COLORS.primary, 
+    width: 42, 
+    height: 42, 
+    borderRadius: 21, 
+    justifyContent: 'center', 
+    alignItems: 'center' 
   },
-  iconBtn: { padding: 4 }
+  attachBtn: { marginRight: 10 },
+  imageDisplay: { width: 200, height: 200, borderRadius: 10, resizeMode: 'cover' }
 });

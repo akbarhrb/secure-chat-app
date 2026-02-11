@@ -36,17 +36,25 @@ export default function RegisterScreen({ navigation }) {
     setLoading(true);
     setLoadingStatus('Initializing...');
 
-    // Small delay to let the UI thread update the spinner before heavy crypto work
+    // Small delay to let UI render the loading state
     setTimeout(async () => {
       try {
         setLoadingStatus('Generating secure keys...');
         const { publicKey, privateKey } = await generateKeys();
         
+        console.log("Keys generated successfully");
+
         setLoadingStatus('Securing your identity...');
+        // This MUST use the same key name as your getPrivateKey function
         await savePrivateKey(privateKey);
         
         setLoadingStatus('Creating account...');
-        await register({ username, email, password, public_key: publicKey });
+        await register({ 
+          username, 
+          email, 
+          password, 
+          public_key: publicKey 
+        });
         
         setLoading(false);
         setShowSuccessModal(true);
@@ -60,7 +68,10 @@ export default function RegisterScreen({ navigation }) {
 
   return (
     <SafeAreaView style={styles.container}>
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} style={{ flex: 1 }}>
+      <KeyboardAvoidingView 
+        behavior={Platform.OS === "ios" ? "padding" : "height"} 
+        style={{ flex: 1 }}
+      >
         <ScrollView contentContainerStyle={styles.scrollContainer} keyboardShouldPersistTaps="handled">
           
           <View style={styles.header}>
@@ -75,7 +86,7 @@ export default function RegisterScreen({ navigation }) {
             {/* Username */}
             <View style={styles.inputContainer}>
               <Text style={styles.label}>Display Name</Text>
-              <div style={styles.inputWrapper}>
+              <View style={styles.inputWrapper}>
                 <Ionicons name="person-outline" size={20} color="#a4b0be" style={styles.inputIcon} />
                 <TextInput
                   value={username}
@@ -83,7 +94,7 @@ export default function RegisterScreen({ navigation }) {
                   placeholder="e.g. JohnDoe"
                   style={styles.input}
                 />
-              </div>
+              </View>
             </View>
 
             {/* Email */}
@@ -136,7 +147,6 @@ export default function RegisterScreen({ navigation }) {
             </TouchableOpacity>
           </View>
 
-          {/* THE NEW ADDITION: LOGIN LINK */}
           <TouchableOpacity 
             onPress={() => navigation.navigate('Login')} 
             style={styles.footerLink}
@@ -207,13 +217,9 @@ const styles = StyleSheet.create({
   buttonText: { color: '#fff', fontSize: 16, fontWeight: '700' },
   buttonTextLoading: { color: '#fff', fontSize: 14, fontWeight: '600', marginLeft: 12 },
   loadingContainer: { flexDirection: 'row', alignItems: 'center' },
-  
-  // Footer Styling
   footerLink: { marginTop: 30, alignItems: 'center' },
   footerText: { fontSize: 14, color: '#64748b' },
   linkBold: { color: '#4e73df', fontWeight: '700' },
-
-  // Modal Styles
   modalOverlay: {
     flex: 1, backgroundColor: 'rgba(30, 41, 59, 0.7)',
     justifyContent: 'center', alignItems: 'center', padding: 24,

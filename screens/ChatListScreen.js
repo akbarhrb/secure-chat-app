@@ -48,14 +48,14 @@ export default function ChatListScreen() {
     }
   };
 
-  // 2. Focused Polling (Refreshes every 1s ONLY when screen is visible)
+  // 2. Focused Polling
   useFocusEffect(
     useCallback(() => {
-      fetchContacts(contacts.length === 0); // Only show spinner if list is empty
+      fetchContacts(contacts.length === 0);
 
       intervalRef.current = setInterval(() => {
         fetchContacts(false);
-      }, 1000);
+      }, 1500); // Slightly increased to reduce server load
 
       return () => {
         if (intervalRef.current) clearInterval(intervalRef.current);
@@ -89,23 +89,35 @@ export default function ChatListScreen() {
     const avatarColor = getAvatarColor(item.email);
     const initial = item.email.charAt(0).toUpperCase();
 
+    // --- ENCRYPTION HANDLING START ---
+    // If the last_message is an object, it's encrypted data.
+    // We can't decrypt it here without the user's private key and serious CPU overhead,
+    // so we show a secure placeholder string.
+    let displayMessage = item.last_message;
+    
+    if (displayMessage && typeof displayMessage === 'object') {
+      displayMessage = "🔒 Encrypted Message";
+    } else if (!displayMessage) {
+      displayMessage = "No messages yet";
+    }
+    // --- ENCRYPTION HANDLING END ---
+
     return (
       <TouchableOpacity
         activeOpacity={0.8}
         onPress={() => navigation.navigate('ChatScreen', {
           userId,
           contactId: item.id,
-          contactEmail: item.email
+          contactEmail: item.email,
+          contactPublicKey: item.public_key // Passing this prevents an extra fetch in ChatScreen
         })}
         style={styles.chatCard}
       >
-        {/* Avatar Section */}
         <View style={[styles.avatar, { backgroundColor: avatarColor }]}>
           <Text style={styles.avatarText}>{initial}</Text>
           <View style={styles.onlineStatus} />
         </View>
 
-        {/* Info Section */}
         <View style={styles.contentContainer}>
           <View style={styles.row}>
             <Text style={styles.emailText} numberOfLines={1}>
@@ -117,7 +129,7 @@ export default function ChatListScreen() {
           </View>
 
           <Text style={[styles.subText, item.unread && styles.unreadText]} numberOfLines={1}>
-            {item.last_message || "No messages yet"}
+            {displayMessage}
           </Text>
         </View>
 
@@ -130,7 +142,6 @@ export default function ChatListScreen() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="dark-content" />
       
-      {/* Custom Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Secure Messages 🔒</Text>
         <TouchableOpacity style={styles.searchButton}>
@@ -154,7 +165,6 @@ export default function ChatListScreen() {
               refreshing={refreshing} 
               onRefresh={onRefresh} 
               tintColor={COLORS.primary}
-              colors={[COLORS.primary]}
             />
           }
           ListEmptyComponent={
