@@ -25,7 +25,7 @@ const COLORS = {
 export default function ChatScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { userId, contactId, contactEmail, contactPublicKey: initialPublicKey } = route.params;
+  const { userPublicId, contactPublicId, contactEmail, contactPublicKey: initialPublicKey } = route.params;
 
   const [messages, setMessages] = useState([]);
   const [text, setText] = useState('');
@@ -62,19 +62,29 @@ export default function ChatScreen() {
   const fetchMessages = async () => {
     try {
       const res = await axios.get(`${API_URL}/messages`, {
-        params: { user_id: userId, contact_id: contactId }
+        params: { 
+          user_public_id: userPublicId, 
+          contact_public_id: contactPublicId 
+        }
       });
       
       const privKey = await getPrivateKey();
       
       const decryptedData = await Promise.all(res.data.map(async (msg) => {
+        // If it's your own message, just show the the encrypted content
+        if (msg.sender_public_id === userPublicId) {
+          if (typeof msg.message === 'object' && msg.message.type === 'text') {
+            return { ...msg, message: msg.message.encryptedMessage }; // or store the plaintext on client side
+          }
+          return msg;
+        }
+
+        // For messages from the contact, decrypt
         if (msg.message && typeof msg.message === 'object') {
           try {
-            // Case 1: Standard Text Message
             if (msg.message.type === 'text' || !msg.message.type) {
               return { ...msg, message: decryptMessage(msg.message, privKey) };
             }
-            // Case 2: Image Message (Handled within the render component for performance)
             if (msg.message.type === 'image') {
               return { ...msg, isImage: true };
             }
@@ -84,6 +94,7 @@ export default function ChatScreen() {
         }
         return msg;
       }));
+
 
       setMessages(decryptedData);
     } catch (err) {
@@ -101,13 +112,13 @@ export default function ChatScreen() {
     try {
       const encryptedPayload = encryptMessage(plainText, contactPublicKey);
       await axios.post(`${API_URL}/messages`, {
-        sender_id: userId,
-        receiver_id: contactId,
+        sender_public_id: userPublicId,
+        receiver_public_id: contactPublicId,
         message: { ...encryptedPayload, type: 'text' }
       });
       fetchMessages();
     } catch (err) {
-      Alert.alert("Error", "Message could not be sent.");
+      console.log("Error Message could not be sent." , err);
     }
   };
 
@@ -127,27 +138,24 @@ export default function ChatScreen() {
   const sendImage = async (base64Data) => {
     setSending(true);
     try {
-      // 1. Encrypt image with AES
       const { encryptedFileData, aesKey } = encryptFile(base64Data);
 
-      // 2. Upload encrypted blob to server
       const formData = new FormData();
-      formData.append('file', encryptedFileData);
-      const uploadRes = await axios.post(`${API_URL}/upload`, formData);
-
-      // 3. Encrypt the AES key with Recipient's RSA Public Key
-      const encryptedKeyBundle = encryptMessage(aesKey, contactPublicKey);
-
-      // 4. Send metadata to chat
-      await axios.post(`${API_URL}/messages`, {
-        sender_id: userId,
-        receiver_id: contactId,
-        message: {
-          type: 'image',
-          fileUrl: uploadRes.data.url,
-          encryptionData: encryptedKeyBundle
-        }
+      formData.append('file', {
+        uri: `data:image/jpeg;base64,${encryptedFileData}`,
+        type: 'image/jpeg',
+        name: 'image.jpg'
       });
+      formData.append('sender_public_id', userPublicId);
+      formData.append('receiver_public_id', contactPublicId);
+      formData.append('message_type', 'image');
+      formData.append('encrypted_key', encryptMessage(aesKey, contactPublicKey));
+      formData.append('iv', 'your-iv-if-any'); // depends on your encryptFile function
+
+      const uploadRes = await axios.post(`${API_URL}/upload`, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+
       fetchMessages();
     } catch (err) {
       Alert.alert("Upload Failed", "Could not send encrypted image.");
@@ -157,20 +165,30 @@ export default function ChatScreen() {
   };
 
   const renderItem = ({ item }) => {
-    const isMine = item.sender_id === userId;
-    
+    const isMine = item.sender_public_id === userPublicId;
+
     return (
-      <View style={[styles.wrapper, isMine ? styles.mine : styles.theirs]}>
-        <View style={[styles.bubble, isMine ? styles.sent : styles.received]}>
+      <View
+        style={[
+          styles.wrapper,
+          isMine ? styles.mineWrapper : styles.theirsWrapper
+        ]}
+      >
+        <View
+          style={[
+            styles.bubble,
+            isMine ? styles.sentBubble : styles.receivedBubble
+          ]}
+        >
           {item.isImage ? (
-            <EncryptedImage 
-              payload={item.message} 
-              isMine={isMine} 
-            />
+            <EncryptedImage payload={item.message} isMine={isMine} />
           ) : (
-            <Text style={{ color: isMine ? '#fff' : '#000' }}>{item.message}</Text>
+            <Text style={[styles.messageText, isMine ? styles.sentText : styles.receivedText]}>
+              {item.message}
+            </Text>
           )}
         </View>
+
         <Text style={styles.timestamp}>
           {new Date(item.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </Text>
@@ -302,5 +320,51 @@ const styles = StyleSheet.create({
     alignItems: 'center' 
   },
   attachBtn: { marginRight: 10 },
-  imageDisplay: { width: 200, height: 200, borderRadius: 10, resizeMode: 'cover' }
+  imageDisplay: { width: 200, height: 200, borderRadius: 10, resizeMode: 'cover' },
+  wrapper: { marginBottom: 12, paddingHorizontal: 16 },
+  mineWrapper: { alignItems: 'flex-end' },
+  theirsWrapper: { alignItems: 'flex-start' },
+
+  bubble: { 
+    paddingVertical: 10, 
+    paddingHorizontal: 14, 
+    borderRadius: 20, 
+    maxWidth: '75%',
+    shadowColor: '#000', 
+    shadowOffset: { width: 0, height: 1 }, 
+    shadowOpacity: 0.1, 
+    shadowRadius: 2, 
+    elevation: 2,
+  },
+
+  sentBubble: {
+    backgroundColor: '#6366F1',
+    borderTopRightRadius: 4,
+    borderBottomRightRadius: 20,
+    borderBottomLeftRadius: 20,
+    borderTopLeftRadius: 20,
+  },
+
+  receivedBubble: {
+    backgroundColor: '#F1F5F9',
+    borderTopLeftRadius: 4,
+    borderTopRightRadius: 20,
+    borderBottomRightRadius: 20,
+    borderBottomLeftRadius: 20,
+  },
+
+  messageText: { fontSize: 16, lineHeight: 22 },
+  sentText: { color: '#fff' },
+  receivedText: { color: '#1E293B' },
+
+  timestamp: { fontSize: 10, color: '#94A3B8', marginTop: 4, marginHorizontal: 5 },
+
+  imageDisplay: { 
+    width: 200, 
+    height: 200, 
+    borderRadius: 12, 
+    resizeMode: 'cover',
+    marginVertical: 4,
+  },
+  
 });

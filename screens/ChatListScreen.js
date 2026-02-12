@@ -24,7 +24,7 @@ const AVATAR_GRADIENTS = ['#818CF8', '#F472B6', '#FB923C', '#2DD4BF', '#A78BFA']
 export default function ChatListScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { userId } = route.params;
+  const { userPublicId  } = route.params;
 
   const [contacts, setContacts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -34,10 +34,11 @@ export default function ChatListScreen() {
 
   // 1. Fetch Contacts Logic
   const fetchContacts = async (showLoading = false) => {
+    console.log(route.params);
     if (showLoading) setLoading(true);
     try {
       const res = await axios.get(`${API_URL}/users`, {
-        params: { exclude_user_id: userId }
+        params: { exclude_user_public_id: userPublicId  }
       });
       setContacts(res.data);
     } catch (err) {
@@ -60,7 +61,7 @@ export default function ChatListScreen() {
       return () => {
         if (intervalRef.current) clearInterval(intervalRef.current);
       };
-    }, [userId, contacts.length])
+    }, [userPublicId, contacts.length])
   );
 
   const onRefresh = useCallback(() => {
@@ -106,8 +107,8 @@ export default function ChatListScreen() {
       <TouchableOpacity
         activeOpacity={0.8}
         onPress={() => navigation.navigate('ChatScreen', {
-          userId,
-          contactId: item.id,
+          userPublicId,
+          contactPublicId: item.public_id,
           contactEmail: item.email,
           contactPublicKey: item.public_key // Passing this prevents an extra fetch in ChatScreen
         })}
@@ -157,7 +158,7 @@ export default function ChatListScreen() {
       ) : (
         <FlatList
           data={contacts}
-          keyExtractor={(item) => item.id.toString()}
+          keyExtractor={(item) => item.public_id.toString()}
           renderItem={renderItem}
           contentContainerStyle={styles.listContent}
           refreshControl={

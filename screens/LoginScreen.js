@@ -12,7 +12,7 @@ export default function LoginScreen({ navigation }) {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [showSuccessModal, setShowSuccessModal] = useState(false);
-  const [userId, setUserId] = useState(null);
+  const [userPublicId, setUserPublicId] = useState(null);
 
   const handleLogin = async () => {
     if (!identifier || !password) {
@@ -22,11 +22,15 @@ export default function LoginScreen({ navigation }) {
 
     setLoading(true);
     try {
-      // We pass identifier as the "email" field to the existing API
+      // Call API
       const res = await login({ email: identifier, password });
-      setUserId(res.data.user_id);
+      const publicId = res.data.public_id;
+
       setLoading(false);
       setShowSuccessModal(true);
+
+      // Pass the publicId to proceedToApp via state
+      setUserPublicId(publicId);
     } catch (err) {
       setLoading(false);
       alert('Login failed: ' + (err.response?.data?.detail || "Invalid credentials"));
@@ -35,7 +39,12 @@ export default function LoginScreen({ navigation }) {
 
   const proceedToApp = () => {
     setShowSuccessModal(false);
-    navigation.navigate('ChatList', { userId });
+    // Use the state that was set after login
+    if (userPublicId) {
+      navigation.navigate('ChatList', { userPublicId });
+    } else {
+      alert("Something went wrong. Please try again.");
+    }
   };
 
   return (
