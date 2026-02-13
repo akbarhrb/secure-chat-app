@@ -52,3 +52,27 @@ export function decryptMessage(data, privateKey) {
   const originalText = bytes.toString(CryptoJS.enc.Utf8);
   return originalText;
 }
+
+// Encrypt a file (base64) with AES
+export function encryptFile(base64Data) {
+  const aesKey = CryptoJS.lib.WordArray.random(32).toString(); // 256-bit key
+  const iv = CryptoJS.lib.WordArray.random(16).toString(); // 128-bit IV
+
+  const encrypted = CryptoJS.AES.encrypt(base64Data, CryptoJS.enc.Hex.parse(aesKey), {
+    iv: CryptoJS.enc.Hex.parse(iv),
+  }).toString();
+
+  return {
+    encryptedFileData: encrypted,
+    aesKey,
+    iv
+  };
+}
+
+// Decrypt a file
+export function decryptFile(encryptedData, aesKey, iv) {
+  const bytes = CryptoJS.AES.decrypt(encryptedData, CryptoJS.enc.Hex.parse(aesKey), {
+    iv: CryptoJS.enc.Hex.parse(iv),
+  });
+  return bytes.toString(CryptoJS.enc.Utf8);
+}

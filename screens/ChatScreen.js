@@ -7,6 +7,7 @@ import axios from 'axios';
 import * as ImagePicker from 'expo-image-picker';
 import { useRoute, useNavigation } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
+import JSEncrypt from "jsencrypt";
 
 // Import your cryptographic utilities
 import { encryptMessage, decryptMessage, encryptFile, decryptFile } from '../services/crypto';
@@ -83,7 +84,7 @@ export default function ChatScreen() {
       // We only decrypt what we received. We can't decrypt what we sent.
       if (msg.sender_public_id !== userPublicId && !newDecryptedMap[msg.id]) {
         try {
-          if (msg.message_type === 'image') {
+          if (msg.message_type === 'file') {
             newDecryptedMap[msg.id] = true; // Signal to EncryptedImage sub-component
           } else if (msg.message && typeof msg.message === 'object') {
             newDecryptedMap[msg.id] = decryptMessage(msg.message, privKey);
@@ -160,23 +161,113 @@ export default function ChatScreen() {
     }
   };
 
+  const sendFile = async (base64Data, filename = "file.dat") => {
+    if (!contactPublicKey) return;
+    setSending(true);
+
+    try {
+      const { encryptedFileData, aesKey, iv } = encryptFile(base64Data);
+
+      // RSA-encrypt AES key
+      const encryptedKey = encryptMessage(aesKey, contactPublicKey).encryptedMessage;
+
+      const formData = new FormData();
+
+      // Web vs Mobile handling
+      if (Platform.OS === "web") {
+        const blob = await (await fetch(`data:application/octet-stream;base64,${encryptedFileData}`)).blob();
+        formData.append("file", blob, filename);
+      } else {
+        formData.append("file", {
+          uri: `data:application/octet-stream;base64,${encryptedFileData}`,
+          type: "application/octet-stream",
+          name: filename
+        });
+      }
+
+      formData.append("sender_public_id", userPublicId);
+      formData.append("receiver_public_id", contactPublicId);
+      formData.append("message_type", "file");
+      formData.append("encrypted_key", encryptedKey);
+      formData.append("iv", iv);
+
+      await axios.post(`${API_URL}/upload`, formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+
+      fetchMessages();
+    } catch (err) {
+      console.error("File send error", err);
+      Alert.alert("Error", "Failed to send file.");
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const pickFile = async () => {
+    try {
+      let base64Data;
+      let filename = "file.dat";
+
+      if (Platform.OS === 'web') {
+        // Use a hidden <input type="file"> for web
+        const input = document.createElement('input');
+        input.type = 'file';
+        input.accept = '*/*';
+        input.click();
+
+        input.onchange = async () => {
+          const file = input.files[0];
+          if (!file) return;
+          filename = file.name;
+          const arrayBuffer = await file.arrayBuffer();
+          base64Data = btoa(
+            new Uint8Array(arrayBuffer)
+              .reduce((data, byte) => data + String.fromCharCode(byte), '')
+          );
+          sendFile(base64Data, filename);
+        };
+      } else {
+        // Mobile: use DocumentPicker
+        const result = await DocumentPicker.getDocumentAsync({ type: "*/*", copyToCacheDirectory: true });
+        if (result.type === "success") {
+          filename = result.name;
+          base64Data = await FileSystem.readAsStringAsync(result.uri, { encoding: FileSystem.EncodingType.Base64 });
+          sendFile(base64Data, filename);
+        }
+      }
+    } catch (err) {
+      console.error("File pick error", err);
+      Alert.alert("Error", "Failed to pick file.");
+    }
+  };
+
+
   const renderItem = ({ item }) => {
+    console.log(item)
     const isMine = item.sender_public_id === userPublicId;
     const isDecrypted = decryptedMap[item.id];
     
     let displayContent = "";
+
     if (isMine) {
       displayContent = "🔒 Encrypted Content";
+    } else if (item.message_type === "file") {
+      displayContent = "📎 Encrypted File";
+    } else if (isDecrypted) {
+      displayContent = decryptedMap[item.id];
+    } else if (item.message && item.message.encryptedMessage) {
+      displayContent = item.message.encryptedMessage;
     } else {
-      displayContent = isDecrypted ? decryptedMap[item.id] : (item.message.encryptedMessage || "Ciphertext...");
+      displayContent = "Ciphertext...";
     }
 
     return (
       <View style={[styles.wrapper, isMine ? styles.mineWrapper : styles.theirsWrapper]}>
         <View style={[styles.bubble, isMine ? styles.sentBubble : styles.receivedBubble]}>
-          {item.message_type === 'image' ? (
+          {item.message_type === 'file' ? (
             <EncryptedImage 
-              payload={item.message} 
+              payload={item} 
               isMine={isMine} 
               shouldDecrypt={!!isDecrypted} 
             />
@@ -228,7 +319,7 @@ export default function ChatScreen() {
         {sending && <ActivityIndicator style={{ margin: 10 }} color={COLORS.primary} />}
 
         <View style={styles.inputBar}>
-          <TouchableOpacity style={styles.attachBtn} onPress={pickImage}>
+          <TouchableOpacity style={styles.attachBtn} onPress={()=>pickFile()}>
             <Ionicons name="image-outline" size={26} color={COLORS.muted} />
           </TouchableOpacity>
           <TextInput 
@@ -247,28 +338,48 @@ export default function ChatScreen() {
   );
 }
 
-function EncryptedImage({ payload, isMine, shouldDecrypt }) {
-  const [imageUri, setImageUri] = useState(null);
-  const [loading, setLoading] = useState(false);
+  function EncryptedImage({ payload, isMine, shouldDecrypt }) {
+    const [imageUri, setImageUri] = useState(null);
+    const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (shouldDecrypt && !isMine && !imageUri) decryptAndLoad();
-  }, [shouldDecrypt]);
+    useEffect(() => {
+      if (shouldDecrypt && !isMine && !imageUri) {
+        decryptAndLoad();
+      }
+    }, [shouldDecrypt]);
 
-  const decryptAndLoad = async () => {
-    setLoading(true);
-    try {
-      const privKey = await getPrivateKey();
-      const aesKey = decryptMessage(payload.encryptionData, privKey);
-      
-      const res = await fetch(payload.fileUrl);
-      const encryptedBase64 = await res.text();
-      
-      const decryptedBase64 = decryptFile(encryptedBase64, aesKey);
-      setImageUri(`data:image/jpeg;base64,${decryptedBase64}`);
-    } catch (e) { console.error("Image decryption error", e); }
-    setLoading(false);
-  };
+    const decryptAndLoad = async () => {
+      setLoading(true);
+      try {
+        const privKey = await getPrivateKey();
+
+        const rsa = new JSEncrypt();
+        rsa.setPrivateKey(privKey);
+        const aesKey = rsa.decrypt(payload.encrypted_key);
+
+        if (!aesKey) throw new Error("AES key decryption failed");
+
+        const res = await fetch(payload.file_url);
+        const arrayBuffer = await res.arrayBuffer();
+
+        const base64Encrypted = btoa(
+          new Uint8Array(arrayBuffer)
+            .reduce((data, byte) => data + String.fromCharCode(byte), "")
+        );
+
+        const decryptedBase64 = decryptFile(
+          base64Encrypted,
+          aesKey,
+          payload.iv
+        );
+
+        setImageUri(`data:image/jpeg;base64,${decryptedBase64}`);
+
+      } catch (e) {
+        console.error("Image decryption error", e);
+      }
+      setLoading(false);
+    };
 
   const openFullImage = () => {
     if (Platform.OS === 'web' && imageUri) {
@@ -277,26 +388,35 @@ function EncryptedImage({ payload, isMine, shouldDecrypt }) {
     }
   };
 
-  if (isMine) return (
-    <View style={styles.placeholderBox}>
-      <Ionicons name="lock-closed" size={24} color="#fff" />
-      <Text style={{color: '#fff', fontSize: 10, marginTop: 4}}>Sent Encrypted</Text>
-    </View>
-  );
+  if (isMine) {
+    return (
+      <View style={styles.placeholderBox}>
+        <Ionicons name="lock-closed" size={24} color="#fff" />
+        <Text style={{ color: "#fff", fontSize: 10, marginTop: 4 }}>
+          Sent Encrypted
+        </Text>
+      </View>
+    );
+  }
 
-  if (!shouldDecrypt) return (
-    <View style={styles.placeholderBox}>
-      <Ionicons name="eye-off" size={24} color={COLORS.muted} />
-      <Text style={{color: COLORS.muted, fontSize: 10, marginTop: 4}}>Click Decrypt</Text>
-    </View>
-  );
+  if (!shouldDecrypt) {
+    return (
+      <View style={styles.placeholderBox}>
+        <Ionicons name="eye-off" size={24} color={COLORS.muted} />
+        <Text style={{ color: COLORS.muted, fontSize: 10, marginTop: 4 }}>
+          Click Decrypt
+        </Text>
+      </View>
+    );
+  }
 
   if (loading) return <ActivityIndicator color={COLORS.primary} />;
 
   return (
-    <TouchableOpacity onPress={openFullImage}>
-      <Image source={{ uri: imageUri }} style={styles.imageDisplay} />
-    </TouchableOpacity>
+    <Image
+      source={{ uri: imageUri }}
+      style={styles.imageDisplay}
+    />
   );
 }
 
