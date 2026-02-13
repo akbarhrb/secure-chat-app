@@ -58,9 +58,15 @@ export function encryptFile(base64Data) {
   const aesKey = CryptoJS.lib.WordArray.random(32).toString(); // 256-bit key
   const iv = CryptoJS.lib.WordArray.random(16).toString(); // 128-bit IV
 
-  const encrypted = CryptoJS.AES.encrypt(base64Data, CryptoJS.enc.Hex.parse(aesKey), {
-    iv: CryptoJS.enc.Hex.parse(iv),
-  }).toString();
+  const encrypted = CryptoJS.AES.encrypt(
+    base64Data,
+    CryptoJS.enc.Hex.parse(aesKey),
+    {
+      iv: CryptoJS.enc.Hex.parse(iv),
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    }
+  ).toString();
 
   return {
     encryptedFileData: encrypted,
@@ -69,10 +75,20 @@ export function encryptFile(base64Data) {
   };
 }
 
-// Decrypt a file
-export function decryptFile(encryptedData, aesKey, iv) {
-  const bytes = CryptoJS.AES.decrypt(encryptedData, CryptoJS.enc.Hex.parse(aesKey), {
-    iv: CryptoJS.enc.Hex.parse(iv),
-  });
-  return bytes.toString(CryptoJS.enc.Utf8);
+// Decrypt AES-encrypted base64 file
+export function decryptFile(base64Encrypted, aesKeyHex, ivHex) {
+  const decrypted = CryptoJS.AES.decrypt(
+    {
+      ciphertext: CryptoJS.enc.Base64.parse(base64Encrypted),
+    },
+    CryptoJS.enc.Hex.parse(aesKeyHex),
+    {
+      iv: CryptoJS.enc.Hex.parse(ivHex),
+      mode: CryptoJS.mode.CBC,
+      padding: CryptoJS.pad.Pkcs7,
+    }
+  );
+
+  // Convert decrypted WordArray to Base64
+  return CryptoJS.enc.Base64.stringify(decrypted);
 }

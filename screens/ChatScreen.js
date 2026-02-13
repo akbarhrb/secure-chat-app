@@ -13,7 +13,7 @@ import JSEncrypt from "jsencrypt";
 import { encryptMessage, decryptMessage, encryptFile, decryptFile } from '../services/crypto';
 import { getPrivateKey } from '../storage/secureStorage';
 
-const API_URL = 'https://secure-chat-app-backend.onrender.com'; 
+const API_URL = 'http://localhost:8000'; 
 const COLORS = { 
   primary: '#6366F1', 
   sentBubble: '#6366F1', 
@@ -148,7 +148,12 @@ export default function ChatScreen() {
       formData.append('sender_public_id', userPublicId);
       formData.append('receiver_public_id', contactPublicId);
       formData.append('message_type', 'image');
-      formData.append('encrypted_key', JSON.stringify(encryptMessage(aesKey, contactPublicKey)));
+      const rsa = new JSEncrypt();
+      rsa.setPublicKey(contactPublicKey);
+
+      const encryptedKey = rsa.encrypt(aesKey);
+
+      formData.append('encrypted_key', encryptedKey);
 
       await axios.post(`${API_URL}/upload`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
@@ -169,7 +174,14 @@ export default function ChatScreen() {
       const { encryptedFileData, aesKey, iv } = encryptFile(base64Data);
 
       // RSA-encrypt AES key
-      const encryptedKey = encryptMessage(aesKey, contactPublicKey).encryptedMessage;
+      const rsa = new JSEncrypt();
+      rsa.setPublicKey(contactPublicKey);
+
+      const encryptedKey = rsa.encrypt(aesKey);
+
+      if (!encryptedKey) {
+        throw new Error("RSA encryption failed");
+      }
 
       const formData = new FormData();
 
@@ -349,6 +361,7 @@ export default function ChatScreen() {
     }, [shouldDecrypt]);
 
     const decryptAndLoad = async () => {
+      console.log(payload);
       setLoading(true);
       try {
         const privKey = await getPrivateKey();

@@ -7,7 +7,7 @@ import axios from 'axios';
 import { useNavigation, useRoute, useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 
-const API_URL = 'https://secure-chat-app-backend.onrender.com'; // Change to your IP for physical devices
+const API_URL = 'http://localhost:8000'; 
 
 const COLORS = {
   primary: '#6366F1',
