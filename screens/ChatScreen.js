@@ -12,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { encryptMessage, decryptMessage, encryptFile, decryptFile } from '../services/crypto';
 import { getPrivateKey } from '../storage/secureStorage';
 
-const API_URL = 'http://localhost:8000'; 
+const API_URL = 'https://secure-chat-app-backend.onrender.com'; 
 const COLORS = { 
   primary: '#6366F1', 
   sentBubble: '#6366F1', 

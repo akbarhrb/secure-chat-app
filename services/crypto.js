@@ -1,5 +1,18 @@
 import CryptoJS from 'crypto-js';
 import JSEncrypt from 'jsencrypt';
+import 'react-native-get-random-values';
+import * as Random from 'expo-random';
+
+if (global.crypto === undefined) {
+  global.crypto = {};
+}
+
+if (!global.crypto.getRandomValues) {
+  global.crypto.getRandomValues = function (array) {
+    const bytes = Random.getRandomBytes(array.length);
+    array.set(bytes);
+  };
+}
 
 // Generate RSA keys
 export function generateKeys() {
